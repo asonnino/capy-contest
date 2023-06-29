@@ -28,7 +28,7 @@ module contest::contest {
     /// Error triggered upon attempting to terminate a contest before its end period
     const ECannotYetTerminateContest: u64 = 4;
     /// Error triggered upon attempting to abandon a contest wihout authorization
-    const EUnauthorizedAbandon: u64 = 5;
+    const EUnauthorizedWithdrawal: u64 = 5;
 
     /// A contest participant
     struct Participant has key, store {
@@ -136,7 +136,9 @@ module contest::contest {
         assert!(vote < vector::length(&contest.participants), EInvalidVote);
         // We only allow supporters at most one epoch after the start of the contest
         assert!(option::is_some(&contest.start), EContestNotStarted);
-        assert!(tx_context::epoch(ctx) == *option::borrow(&contest.start) + 1, ESupporterEnrollementWindowClosed);
+        let epoch = tx_context::epoch(ctx);
+        let start = *option::borrow(&contest.start);
+        assert!(epoch == start || epoch == start + 1, ESupporterEnrollementWindowClosed);
         
         // Pay the support fee (constitutes the price for the winner)
         let coin_balance = coin::balance_mut(fee);
@@ -170,7 +172,7 @@ module contest::contest {
         }
     }
  
-    /// Terminate the contest
+    /// Terminate the contest and distribute the prizes
     entry fun terminate(contest: &mut Contest, ctx: &mut TxContext) {
         // Ensure the contest can only be terminated after two epochs
         assert!(option::is_some(&contest.start), EContestNotStarted);
@@ -251,6 +253,7 @@ module contest::contest {
     fun pay_supporters(contest: &mut Contest, remaining: u64, ctx: &mut TxContext) {
         let winner = vector::borrow_mut(&mut contest.participants, contest.winners.first_place);
         let number_of_supporters = vector::length(&winner.supporters);
+        
         let i = 0;
         while (i < number_of_supporters) {
             let amount = remaining / number_of_supporters;
@@ -271,12 +274,13 @@ module contest::contest {
     entry fun withdraw(contest: &mut Contest, participant: u64, ctx: &mut TxContext) {
         // Ensure only the owner can withdraw the participant from the contest
         let participant_object = vector::borrow(&contest.participants, participant);
-        assert!(participant_object.owner == tx_context::sender(ctx), EUnauthorizedAbandon);
+        assert!(participant_object.owner == tx_context::sender(ctx), EUnauthorizedWithdrawal);
 
         // TODO: Withdraw without changing the index of the participants
         // A map would be nice be we cannot iterate over it 
         // It seems we need both a table and a vector of all keys of the table
         // Maybe make a generic iterable table?
+        
         // Isolate all functions related to Winners into a separate module. That is almost all helpers
         // the winner module is aware of many structs of the contest module but never takes the contest
         // itself as parameter
