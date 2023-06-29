@@ -25,10 +25,12 @@ module contest::contest {
     const ESupporterEnrollementWindowClosed: u64 = 2;
     /// Error triggered upon attempting to support an unknown participant
     const EInvalidVote: u64 = 3;
+    /// Error triggered upon attempting to access an unknown participant
+    const EParticipantNotFound: u64 = 4;
     /// Error triggered upon attempting to terminate a contest before its end period
-    const ECannotYetTerminateContest: u64 = 4;
+    const ECannotYetTerminateContest: u64 = 5;
     /// Error triggered upon attempting to abandon a contest wihout authorization
-    const EUnauthorizedWithdrawal: u64 = 5;
+    const EUnauthorizedWithdrawal: u64 = 6;
 
     /// A contest participant
     struct Participant has key, store {
@@ -64,9 +66,18 @@ module contest::contest {
         /// The prize for the winners (accumulated from the fees)
         prize: Balance<SUI>,
         /// The list of participants (never re-ordered, the index is used as fixed participant id)
-        participants: vector<Participant>,
+        participants: vector<Option<Participant>>,
         /// The current winners of the contest (updated throughout the contest)
         winners: Winners
+    }
+
+    /// Get the participant at the given index
+    fun get_participant(contest: &Contest, particpant: u64): &Option<Participant> {
+        vector::borrow(&contest.participants, particpant)
+    }
+    /// Get the participant at the given index (mutable)
+    fun get_mut_participant(contest: &mut Contest, particpant: u64): &mut Option<Participant> {
+        vector::borrow_mut(&mut contest.participants, particpant)
     }
 
     /// A medal to grant to the winners of the contest
@@ -127,18 +138,19 @@ module contest::contest {
             score: 0,
             supporters: vector::empty()
         };
-        vector::push_back(&mut contest.participants, participant);
+        vector::push_back(&mut contest.participants, option::some(participant));
     }
 
     /// Support a participant
     entry fun support(fee: &mut Coin<SUI>, contest: &mut Contest, vote: u64, ctx: &mut TxContext) {
-        // Ensure support is pledged to an existing participant
-        assert!(vote < vector::length(&contest.participants), EInvalidVote);
         // We only allow supporters at most one epoch after the start of the contest
         assert!(option::is_some(&contest.start), EContestNotStarted);
         let epoch = tx_context::epoch(ctx);
         let start = *option::borrow(&contest.start);
         assert!(epoch == start || epoch == start + 1, ESupporterEnrollementWindowClosed);
+        // Ensure support is pledged to an existing participant
+        assert!(vote < vector::length(&contest.participants), EInvalidVote);
+        assert!(option::is_some(get_participant(contest, vote)), EParticipantNotFound);
         
         // Pay the support fee (constitutes the price for the winner)
         let coin_balance = coin::balance_mut(fee);
@@ -146,7 +158,7 @@ module contest::contest {
         balance::join(&mut contest.prize, paid);
 
         // Update the participant with the new vote of support
-        let participant = vector::borrow_mut(&mut contest.participants, vote);
+        let participant = option::borrow_mut(get_mut_participant(contest, vote));
         participant.score = participant.score + 1;
         vector::push_back(&mut participant.supporters, tx_context::sender(ctx));        
 
@@ -156,9 +168,11 @@ module contest::contest {
 
     /// Update the current winners of the contest
     fun update_winners(contest: &mut Contest, participant: u64, participant_score: u64) {
-        let first_winner = vector::borrow(&contest.participants, contest.winners.first_place);
-        let second_winner = vector::borrow(&contest.participants, contest.winners.second_place);
-        let third_winner = vector::borrow(&contest.participants, contest.winners.third_place);
+        // Note that we only update the winners upon receiving a new vote of support, this means
+        // all winners are guaranteed to exist (and not be none).
+        let first_winner = option::borrow(vector::borrow(&contest.participants, contest.winners.first_place));
+        let second_winner = option::borrow(vector::borrow(&contest.participants, contest.winners.second_place));
+        let third_winner = option::borrow(vector::borrow(&contest.participants, contest.winners.third_place));
 
         if (participant_score > first_winner.score) {
             contest.winners.third_place = contest.winners.second_place;
@@ -183,16 +197,20 @@ module contest::contest {
 
         // Return all capies to their owner and delete the participant object
         while (!vector::is_empty(&contest.participants)) {
-            let Participant { 
-                id, 
-                owner, 
-                capy, 
-                score: _, 
-                supporters: _ 
-            } = vector::pop_back(&mut contest.participants);
+            let participant = vector::pop_back(&mut contest.participants);
+            if (option::is_some(&participant)) {
+                let Participant { 
+                    id, 
+                    owner, 
+                    capy, 
+                    score: _, 
+                    supporters: _ 
+                } = option::extract(&mut participant);
 
-            transfer::public_transfer(capy, owner);
-            object::delete(id);
+                transfer::public_transfer(capy, owner);
+                object::delete(id);
+            };
+            option::destroy_none(participant);
         };
 
         // Reset the contest object
@@ -230,6 +248,8 @@ module contest::contest {
 
     /// Transfer a specific amount from the contest prize to the specified recipeint
     fun grant_prize_and_medal(recipient: u64, place: u64, prize: u64, contest: &mut Contest, ctx: &mut TxContext) {
+        // Note that we only grant prixes to winners after ensuring the list of participants is not empty; this
+        // means the winner is guaranteed to exist (and not be none).
         let contenstant = vector::borrow_mut(&mut contest.participants, recipient);
 
         // Grant a medal to the capy
@@ -238,20 +258,20 @@ module contest::contest {
             place,
             edition: contest.edition,
             prize,
-            supporters: vector::length(&contenstant.supporters),
-            winner: object::id(&contenstant.capy),
+            supporters: vector::length(&option::borrow(contenstant).supporters),
+            winner: object::id(&option::borrow(contenstant).capy),
         };
-        capy::add_item(&mut contenstant.capy, gold_medal);
+        capy::add_item(&mut option::borrow_mut(contenstant).capy, gold_medal);
 
         // Transfer the prize to the owner of the capy
         let balance = balance::split(&mut contest.prize, prize);
         let coin = coin::from_balance(balance, ctx);
-        transfer::public_transfer(coin, contenstant.owner);
+        transfer::public_transfer(coin, option::borrow(contenstant).owner);
     }
 
     /// Divide the specified amount among the supporters of the first winner
     fun pay_supporters(contest: &mut Contest, remaining: u64, ctx: &mut TxContext) {
-        let winner = vector::borrow_mut(&mut contest.participants, contest.winners.first_place);
+        let winner = option::borrow(vector::borrow_mut(&mut contest.participants, contest.winners.first_place));
         let number_of_supporters = vector::length(&winner.supporters);
         
         let i = 0;
@@ -273,16 +293,20 @@ module contest::contest {
     /// Abandon the contest and immediatly retreive the capy
     entry fun withdraw(contest: &mut Contest, participant: u64, ctx: &mut TxContext) {
         // Ensure only the owner can withdraw the participant from the contest
-        let participant_object = vector::borrow(&contest.participants, participant);
-        assert!(participant_object.owner == tx_context::sender(ctx), EUnauthorizedWithdrawal);
+        let participant = get_mut_participant(contest, participant);
+        assert!(option::is_some(participant), EParticipantNotFound);
+        assert!(option::borrow(participant).owner == tx_context::sender(ctx), EUnauthorizedWithdrawal);
 
-        // TODO: Withdraw without changing the index of the participants
-        // A map would be nice be we cannot iterate over it 
-        // It seems we need both a table and a vector of all keys of the table
-        // Maybe make a generic iterable table?
-        
-        // Isolate all functions related to Winners into a separate module. That is almost all helpers
-        // the winner module is aware of many structs of the contest module but never takes the contest
-        // itself as parameter
+        // Return the capy to the owner and delete the participant object
+        let Participant { 
+            id, 
+            owner, 
+            capy, 
+            score: _, 
+            supporters: _ 
+        } = option::extract(participant);
+
+        transfer::public_transfer(capy, owner);
+        object::delete(id);
     }
 }
