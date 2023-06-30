@@ -139,7 +139,12 @@ module contest::contest {
         transfer::public_share_object(contest);
     }
 
-    /// Enroll a capy to a contest
+    /// Start a new contest
+    entry fun start(fee: &mut Coin<SUI>, contest: &mut Contest, capy: Capy, ctx: &mut TxContext) {
+        participate(fee, contest, capy, ctx)
+    }
+
+    /// Enroll a capy into a contest
     entry fun participate(fee: &mut Coin<SUI>, contest: &mut Contest, capy: Capy, ctx: &mut TxContext) {
         // We only enroll participants during the epoch when the contest starts
         let current_epoch = tx_context::epoch(ctx);
@@ -263,10 +268,11 @@ module contest::contest {
         // Reset the contest object
         contest.edition = contest.edition + 1;
         contest.start = option::none();
-
-        contest.winners.first_place = 0;
-        contest.winners.second_place = 0;
-        contest.winners.third_place = 0;
+        contest.winners = Winners {
+            first_place: 0,
+            second_place: 0,
+            third_place: 0
+        };
     }
 
     /// Distribute the prizes and medals to the winners
