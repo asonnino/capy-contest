@@ -5,8 +5,9 @@ module contest::contest {
     use sui::coin::{Self, Coin};
     use sui::balance::{Self, Balance};
     use sui::transfer;
-    use std::option::{Self, Option};
+    use sui::event::emit;
 
+    use std::option::{Self, Option};
     use std::vector;
 
     use capy::capy::{Self, Capy};
@@ -32,6 +33,31 @@ module contest::contest {
     /// Error triggered upon attempting to abandon a contest wihout authorization
     const EUnauthorizedWithdrawal: u64 = 6;
 
+    /// Event emitted when a contest starts
+    struct ContestStarted has copy, drop {
+        edition: u64,
+    }
+    /// Event emitted when a contest ends
+    struct ContestEnded has copy, drop {
+        edition: u64,
+        winners: Winners
+    }
+    /// Event emitted when a new participant is added to the contest
+    struct ParticipantAdded has copy, drop {
+        id: ID,
+    }
+    /// Event emitted when a participant is removed from the contest
+    struct ParticipantRemoved has copy, drop {
+        id: ID,
+    }
+    /// Event emitted when a participant is supported
+    struct ParticipantSupported has copy, drop {
+        id: ID,
+        supporter: address,
+        score: u64,
+        winners: Winners
+    }
+    
     /// A contest participant
     struct Participant has key, store {
         id: UID,
@@ -46,8 +72,7 @@ module contest::contest {
     }
 
     /// The current winners
-    struct Winners has key, store {
-        id: UID,
+    struct Winners has store, copy, drop {
         /// The index of the first winner in the list of participants (see [`Contest`])
         first_place: u64,
         /// The index of the second winner in the list of participants (see [`Contest`])
@@ -99,7 +124,6 @@ module contest::contest {
     /// This method should be called only once (the contest object can be re-used)
     fun init(ctx: &mut TxContext) {
         let winners = Winners {
-            id: object::new(ctx),
             first_place: 0,
             second_place: 0,
             third_place: 0
@@ -123,6 +147,9 @@ module contest::contest {
             assert!(option::borrow(&contest.start) == &current_epoch, EParticipantEnrollementWindowClosed);
         } else {
             option::fill(&mut contest.start, current_epoch);
+
+            // Emit a contest started event
+            emit(ContestStarted{ edition: contest.edition });
         };
         
         // Pay the inscription fee (constitutes the price for the winner)
@@ -138,7 +165,11 @@ module contest::contest {
             score: 0,
             supporters: vector::empty()
         };
+        let id = object::id(&participant);
         vector::push_back(&mut contest.participants, option::some(participant));
+
+        // Emit a participant added event
+        emit(ParticipantAdded{ id });
     }
 
     /// Support a participant
@@ -158,16 +189,27 @@ module contest::contest {
         balance::join(&mut contest.prize, paid);
 
         // Update the participant with the new vote of support
+        let supporter = tx_context::sender(ctx);
         let participant = get_mut_participant(&mut contest.participants, vote);
         participant.score = participant.score + 1;
-        vector::push_back(&mut participant.supporters, tx_context::sender(ctx));        
-
+        vector::push_back(&mut participant.supporters, supporter);  
+        
         // Update the current winners of the contest
-        update_winners(contest, vote, participant.score);
+        let id = object::id(participant);
+        let score = participant.score;
+        let new_winners = update_winners(contest, vote, score);
+
+        // Emit a participant supported event
+        emit(ParticipantSupported{ 
+            id,
+            supporter,
+            score,
+            winners: new_winners
+        })
     }
 
     /// Update the current winners of the contest
-    fun update_winners(contest: &mut Contest, participant: u64, participant_score: u64) {
+    fun update_winners(contest: &mut Contest, participant: u64, participant_score: u64): Winners {
         // Note that we only update the winners upon receiving a new vote of support, this means
         // all winners are guaranteed to exist (and not be none).
         let first_winner = get_participant(&contest.participants, contest.winners.first_place);
@@ -183,7 +225,9 @@ module contest::contest {
             contest.winners.second_place = participant;
         } else if (participant_score > third_winner.score) {
             contest.winners.third_place = participant;
-        }
+        };
+
+        return contest.winners
     }
  
     /// Terminate the contest and distribute the prizes
@@ -212,6 +256,9 @@ module contest::contest {
             };
             option::destroy_none(participant);
         };
+
+        // Emit a contest ended event
+        emit(ContestEnded{ edition: contest.edition, winners: contest.winners });
 
         // Reset the contest object
         contest.edition = contest.edition + 1;
@@ -298,15 +345,20 @@ module contest::contest {
         assert!(option::borrow(participant).owner == tx_context::sender(ctx), EUnauthorizedWithdrawal);
 
         // Return the capy to the owner and delete the participant object
+        let participant = option::extract(participant);
+        let id = object::id(&participant);
         let Participant { 
-            id, 
+            id: uid, 
             owner, 
             capy, 
             score: _, 
             supporters: _ 
-        } = option::extract(participant);
+        } = participant;
 
         transfer::public_transfer(capy, owner);
-        object::delete(id);
+        object::delete(uid);
+
+        // Emit a participant removed event
+        emit(ParticipantRemoved{ id });
     }
 }
