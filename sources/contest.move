@@ -18,7 +18,7 @@ module contest::contest {
     /// Fee to support a participant 
     const SUPPORTER_FEE: u64 = 100;
 
-    /// Error triggered upon attemting to operate over a contest that is not yet started
+    /// Error triggered upon attempting to operate over a contest that is not yet started
     const EContestNotStarted: u64 = 0;
     /// Error triggered upon attempting to enroll a participant after the allowed period
     const EParticipantEnrollementWindowClosed: u64 = 1;
@@ -30,7 +30,7 @@ module contest::contest {
     const EParticipantNotFound: u64 = 4;
     /// Error triggered upon attempting to terminate a contest before its end period
     const ECannotYetTerminateContest: u64 = 5;
-    /// Error triggered upon attempting to abandon a contest wihout authorization
+    // / Error triggered upon attempting to abandon a contest without authorization
     const EUnauthorizedWithdrawal: u64 = 6;
 
     /// Event emitted when a contest starts
@@ -57,7 +57,6 @@ module contest::contest {
         score: u64,
         winners: Winners
     }
-    
     /// A contest participant
     struct Participant has key, store {
         id: UID,
@@ -338,7 +337,7 @@ module contest::contest {
         }
     }
 
-    /// Abandon the contest and immediatly retreive the capy
+    /// Abandon the contest and immediately retrieve the capy
     entry fun withdraw(contest: &mut Contest, participant: u64, ctx: &mut TxContext) {
         // Ensure only the owner can withdraw the participant from the contest
         let participant = vector::borrow_mut(&mut contest.participants, participant);
