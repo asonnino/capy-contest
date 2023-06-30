@@ -139,11 +139,6 @@ module contest::contest {
         transfer::public_share_object(contest);
     }
 
-    /// Start a new contest
-    entry fun start(fee: &mut Coin<SUI>, contest: &mut Contest, capy: Capy, ctx: &mut TxContext) {
-        participate(fee, contest, capy, ctx)
-    }
-
     /// Enroll a capy into a contest
     entry fun participate(fee: &mut Coin<SUI>, contest: &mut Contest, capy: Capy, ctx: &mut TxContext) {
         // We only enroll participants during the epoch when the contest starts
